@@ -19,7 +19,7 @@ const names: Record<SharkKind, string> = { manta: 'Manta ray', whaleshark: 'Whal
 let roster = mixed.map(s => ({ ...s }));
 let paused = false;
 const themeModes = Object.keys(themes) as OceanTheme[];
-let currentTheme: OceanTheme = 'deep';
+let currentTheme: OceanTheme = 'light';
 let statusTimer: ReturnType<typeof setTimeout>;
 const storage = {
   get(key: string) { try { return localStorage.getItem(key); } catch { return null; } },

@@ -2092,7 +2092,7 @@
   var roster = mixed.map((s) => ({ ...s }));
   var paused = false;
   var themeModes = Object.keys(themes);
-  var currentTheme = "deep";
+  var currentTheme = "light";
   var statusTimer;
   var storage = {
     get(key) {

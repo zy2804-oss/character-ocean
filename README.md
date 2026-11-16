@@ -14,7 +14,7 @@ Download or clone this repository and open [`dist/index.html`](dist/index.html) 
 
 ## Interaction
 
-- Choose Day, Night, or Deep Water. Deep Water uses angled light shafts and suspended particles.
+- The aquarium opens in Day mode on your first visit. Choose Day, Night, or Deep Water. Deep Water uses angled light shafts and suspended particles.
 - Switch among DOTS, GEO, ASCII, and HANZI. HANZI draws fish with characters from the *Classic of Clarity and Stillness*.
 - Select marine life and adjust the swim speed in Ocean Settings.
 - Click the water to create a ripple at that point, or choose **Make a ripple** to trigger one near a group of fish. Nearby small fish dart away and larger fish curve around the disturbance. Repeated clicks renew the disturbance. After a quiet interval the fish return to their usual movement.
