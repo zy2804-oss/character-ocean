@@ -2,13 +2,12 @@
 import { OceanEngine } from './engine';
 import type { SharkKind, SharkSpec } from './world';
 import type { RenderMode } from './renderer';
+import { themes, type OceanTheme } from './themes';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const icons = {
   pause: '<svg viewBox="0 0 24 24"><path d="M9 5v14M15 5v14"/></svg>',
   play: '<svg viewBox="0 0 24 24"><path d="m8 5 11 7-11 7Z"/></svg>',
-  moon: '<svg viewBox="0 0 24 24"><path d="M20.5 13A8.5 8.5 0 0 1 11 3.5 8.5 8.5 0 1 0 20.5 13Z"/></svg>',
-  sun: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.5"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5"/></svg>',
 };
 const mixed: SharkSpec[] = [
   { kind: 'whaleshark', size: 1 }, { kind: 'manta', size: .83 },
@@ -16,24 +15,18 @@ const mixed: SharkSpec[] = [
   { kind: 'sunfish', size: .64 }, { kind: 'classic', size: .78 },
 ];
 const kinds: SharkKind[] = ['manta', 'whaleshark', 'sunfish', 'thresher', 'mako', 'nurse', 'greathammer', 'zebra', 'tiger', 'classic', 'hammerhead'];
-const names: Record<SharkKind, string> = { manta: '蝠鲼', whaleshark: '鲸鲨', sunfish: '翻车鱼', thresher: '长尾鲨', mako: '灰鲭鲨', nurse: '护士鲨', greathammer: '大锤头鲨', zebra: '斑马鲨', tiger: '虎鲨', classic: '灰鲨', hammerhead: '锤头鲨' };
+const names: Record<SharkKind, string> = { manta: 'Manta ray', whaleshark: 'Whale shark', sunfish: 'Sunfish', thresher: 'Thresher shark', mako: 'Mako shark', nurse: 'Nurse shark', greathammer: 'Great hammerhead', zebra: 'Zebra shark', tiger: 'Tiger shark', classic: 'Classic shark', hammerhead: 'Hammerhead' };
 let roster = mixed.map(s => ({ ...s }));
 let paused = false;
-let dark = false;
+const themeModes = Object.keys(themes) as OceanTheme[];
+let currentTheme: OceanTheme = 'deep';
 let statusTimer: ReturnType<typeof setTimeout>;
-type Thought = { text: string; date: string };
-let thoughts: Thought[] = [];
 const storage = {
   get(key: string) { try { return localStorage.getItem(key); } catch { return null; } },
   set(key: string, value: string) { try { localStorage.setItem(key, value); return true; } catch { return false; } },
 };
-try {
-  const saved: unknown = JSON.parse(storage.get('ascii-ocean-thoughts') ?? '[]');
-  if (Array.isArray(saved)) thoughts = saved.filter((s): s is Thought => typeof s?.text === 'string' && typeof s?.date === 'string' && !isNaN(Date.parse(s.date))).slice(0, 30);
-} catch { /* Empty history if browser storage was edited. */ }
-
 function status(message: string) {
-  const el = $('thought-status');
+  const el = $('ocean-status');
   clearTimeout(statusTimer);
   el.textContent = message;
   el.classList.add('visible');
@@ -42,24 +35,22 @@ function status(message: string) {
 
 const pause = $<HTMLButtonElement>('pause');
 const theme = $<HTMLButtonElement>('theme');
+const themeSelect = $<HTMLSelectElement>('water-theme');
 pause.innerHTML = icons.pause;
-theme.innerHTML = icons.moon;
+
 
 const engine = new OceanEngine($<HTMLCanvasElement>('ocean'), roster);
 // Give the initial scene a small head start, so the first frame already feels alive.
 engine.setSharks(roster);
 
-const renderModes: RenderMode[] = ['ascii', 'type', 'braille', 'blocks', 'geometry', 'lines', 'hanzi'];
-const modeLabels: Record<RenderMode, string> = { ascii: 'ASCII', type: 'TYPE', braille: 'DOTS', blocks: 'BLOCK', geometry: 'GEO', lines: 'LINES', hanzi: 'HANZI' };
-const modeNames: Record<RenderMode, string> = { ascii: 'ASCII 原始字符', type: '纯字符', braille: '盲文点阵', blocks: '方块阴影', geometry: '几何符号', lines: '线条编织', hanzi: '汉字艺术' };
+const renderModes: RenderMode[] = ['braille', 'geometry', 'ascii', 'hanzi'];
+const modeLabels: Record<RenderMode, string> = { ascii: 'ASCII', braille: 'DOTS', geometry: 'GEO', hanzi: 'HANZI' };
+const modeNames: Record<RenderMode, string> = { ascii: 'ASCII', braille: 'Braille dots', geometry: 'Geometric shapes', hanzi: 'Hanzi' };
 const modeDescriptions: Record<RenderMode, string> = {
-  ascii: '等宽字符与灰色小格，保留最初的质感。',
-  type: '用 @ # % R E A T 与标点的疏密，勾勒鱼身与光影。',
-  braille: '用细密的点勾勒身体，轻盈、通透。',
-  blocks: '用方块和阴影表达明暗，更厚实的像素感。',
-  geometry: '圆点、圆环、菱形与方块，组成几何鱼群。',
-  lines: '线条沿鱼身方向排列，像游动的编织线稿。',
-  hanzi: '一、十、川、水、魚、鯊，以笔画疏密表现层次。',
+  ascii: 'Monospaced characters and shaded cells shape the fish.',
+  braille: 'Fine dots trace the fish silhouettes.',
+  geometry: 'Dots, rings, diamonds, and squares form the fish.',
+  hanzi: 'The fish are drawn with characters from the Classic of Clarity and Stillness.',
 };
 let renderMode: RenderMode = 'ascii';
 function applyRenderMode(mode: RenderMode) {
@@ -67,8 +58,8 @@ function applyRenderMode(mode: RenderMode) {
   engine.setRenderMode(mode);
   $<HTMLSelectElement>('render-mode').value = mode;
   $('style-toggle').textContent = modeLabels[mode];
-  $('style-toggle').setAttribute('aria-label', `切换字符风格，当前${modeNames[mode]}`);
-  $('style-toggle').title = `当前：${modeNames[mode]} · 点击切换下一种`;
+  $('style-toggle').setAttribute('aria-label', `Cycle character styles. Current style is ${modeNames[mode]}.`);
+  $('style-toggle').title = `${modeNames[mode]} · Next style`;
   $('mode-description').textContent = modeDescriptions[mode];
   storage.set('ascii-ocean-render-mode', mode);
 }
@@ -81,24 +72,30 @@ pause.addEventListener('click', () => {
   paused = !paused;
   engine.setPaused(paused);
   pause.innerHTML = paused ? icons.play : icons.pause;
-  pause.setAttribute('aria-label', paused ? '继续动画' : '暂停动画');
+  pause.setAttribute('aria-label', paused ? 'Resume animation' : 'Pause animation');
   pause.setAttribute('aria-pressed', String(paused));
-  pause.title = paused ? '继续动画' : '暂停动画';
+  pause.title = paused ? 'Resume animation' : 'Pause animation';
 });
 
-function applyTheme(value: boolean) {
-  dark = value;
-  document.documentElement.dataset.theme = dark ? 'dark' : 'light';
-  engine.setTheme(dark);
-  theme.innerHTML = dark ? icons.sun : icons.moon;
-  theme.setAttribute('aria-label', dark ? '切换浅色' : '切换深色');
-  theme.setAttribute('aria-pressed', String(dark));
-  theme.title = dark ? '切换浅色' : '切换深色';
-  document.querySelector('meta[name=theme-color]')?.setAttribute('content', dark ? '#07111a' : '#fafaf8');
+function applyTheme(value: OceanTheme) {
+  currentTheme = value;
+  const { label, page } = themes[value];
+  document.documentElement.dataset.theme = value;
+  document.documentElement.style.setProperty('--page', page);
+  engine.setTheme(value);
+  themeSelect.value = value;
+  theme.textContent = label;
+  theme.setAttribute('aria-label', `Cycle water themes. Current theme is ${label}.`);
+  theme.title = `${label} · Next water theme`;
+  document.querySelector('meta[name=theme-color]')?.setAttribute('content', page);
 }
-applyTheme(storage.get('ascii-ocean-theme') === 'dark');
+
+const savedTheme = storage.get('ascii-ocean-theme') as OceanTheme | null;
+applyTheme(savedTheme && themeModes.includes(savedTheme) ? savedTheme : currentTheme);
+
 // Fade only the old water layer; controls remain live while the new palette renders.
-theme.addEventListener('click', () => {
+function changeTheme(value: OceanTheme) {
+  if (value === currentTheme) return;
   document.querySelectorAll('.ocean-theme-veil').forEach(el => el.remove());
   let veil: HTMLCanvasElement | null = null;
   if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
@@ -120,8 +117,8 @@ theme.addEventListener('click', () => {
       veil = snapshot;
     }
   }
-  applyTheme(!dark);
-  storage.set('ascii-ocean-theme', dark ? 'dark' : 'light');
+  applyTheme(value);
+  storage.set('ascii-ocean-theme', value);
   if (veil) {
     const snapshot = veil;
     const fade = snapshot.animate([{ opacity: 1 }, { opacity: 0 }], {
@@ -131,31 +128,27 @@ theme.addEventListener('click', () => {
     // A background tab can suspend animations; do not leave an obsolete layer behind.
     window.setTimeout(() => snapshot.remove(), 650);
   }
-});
+}
 
-const panels = [ ['history-toggle', 'history-panel'], ['settings-toggle', 'settings-panel'] ] as const;
-function closePanels() {
-  for (const [button, panel] of panels) { $(panel).hidden = true; $(button).setAttribute('aria-expanded', 'false'); }
+theme.addEventListener('click', () => changeTheme(themeModes[(themeModes.indexOf(currentTheme) + 1) % themeModes.length]));
+themeSelect.addEventListener('change', () => changeTheme(themeSelect.value as OceanTheme));
+
+const settingsToggle = $('settings-toggle');
+const settingsPanel = $('settings-panel');
+
+function setSettingsOpen(open: boolean) {
+  settingsPanel.hidden = !open;
+  settingsToggle.setAttribute('aria-expanded', String(open));
 }
-for (const [button, panel] of panels) {
-  $(button).addEventListener('click', () => {
-    const open = $(panel).hidden;
-    closePanels();
-    $(panel).hidden = !open;
-    $(button).setAttribute('aria-expanded', String(open));
-  });
-}
+
+settingsToggle.addEventListener('click', () => setSettingsOpen(settingsPanel.hidden));
 document.addEventListener('click', e => {
-  const target = e.target as Element;
-  if (!target.closest('.history-wrap') && !target.closest('.ocean-controls')) closePanels();
+  if (!(e.target as Element).closest('.ocean-controls')) setSettingsOpen(false);
 });
 document.addEventListener('keydown', e => {
-  if (e.key === 'Escape') {
-    for (const [button, panel] of panels) {
-      if (!$(panel).hidden && $(panel).contains(document.activeElement)) $(button).focus();
-    }
-    closePanels();
-  }
+  if (e.key !== 'Escape' || settingsPanel.hidden) return;
+  if (settingsPanel.contains(document.activeElement)) settingsToggle.focus();
+  setSettingsOpen(false);
 });
 
 const speed = $<HTMLInputElement>('speed');
@@ -166,22 +159,23 @@ $<HTMLSelectElement>('roster').addEventListener('change', e => {
   engine.setSharks(roster);
 });
 $('add-shark').addEventListener('click', () => {
-  if (roster.length >= 9) { status('海里已经很热闹了，让它们慢慢游吧。'); return; }
+  if (roster.length >= 9) { status('The tank is full. Let the animals swim.'); return; }
   const kind = kinds.find(kind => !roster.some(fish => fish.kind === kind)) ?? kinds[roster.length % kinds.length];
   roster.push({ kind, size: .64 + Math.random() * .15 });
   engine.setSharks(roster);
-  status(`${names[kind]}，游进了这片海。`);
+  status(`Now swimming · ${names[kind]}`);
 });
 $('ripple').addEventListener('click', () => {
-  engine.ripple(window.innerWidth * .5, window.innerHeight * .67);
-  status('轻轻碰一下，水面就有了回响。');
+  const panel = document.querySelector<HTMLElement>('.center-panel:not([hidden])');
+  engine.rippleNearSchool(panel?.getBoundingClientRect());
+  status('A ripple spreads across the water.');
 });
 
-type Layout = 'search' | 'music' | 'focus';
-const layouts: Layout[] = ['search', 'music', 'focus'];
-const layoutNames: Record<Layout, string> = { search: '搜索', music: '播放', focus: '专注' };
-const headlines: Record<Layout, string> = { search: 'where to next?', music: 'take a little break.', focus: 'one thing at a time.' };
-let layout: Layout = 'search';
+type Layout = 'music' | 'focus';
+const layouts: Layout[] = ['music', 'focus'];
+const layoutNames: Record<Layout, string> = { music: 'Music', focus: 'Focus' };
+const headlines: Record<Layout, string> = { music: 'take a little break.', focus: 'one thing at a time.' };
+let layout: Layout = 'music';
 
 // Playback is a visual demo; no audio file or remote service is needed.
 const tracks = [
@@ -216,7 +210,7 @@ function renderTrack() {
   trackSeek.style.setProperty('--progress', `${position / track.duration * 100}%`);
   trackSeek.setAttribute('aria-valuetext', `${formatTime(position)} / ${formatTime(track.duration)}`);
   $('music-panel').classList.toggle('is-playing', playing);
-  updatePlayButton(trackPlay, playing, playing ? '暂停播放演示' : '播放演示');
+  updatePlayButton(trackPlay, playing, playing ? 'Pause playback demo' : 'Play demo');
 }
 function setPlaying(value: boolean) {
   trackPosition = playbackPosition();
@@ -252,7 +246,7 @@ focusTask.addEventListener('input', () => storage.set('ascii-ocean-focus-task', 
 function remainingFocus() { return focusing ? Math.max(0, (focusEndsAt - Date.now()) / 1000) : focusRemaining; }
 function renderFocus() {
   updateText('focus-time', formatTime(Math.ceil(remainingFocus())).padStart(5, '0'));
-  const label = focusing ? '暂停专注' : focusRemaining < focusDuration && focusRemaining > 0 ? '继续专注' : '开始专注';
+  const label = focusing ? 'Pause focus timer' : focusRemaining < focusDuration && focusRemaining > 0 ? 'Resume focus timer' : 'Start focus timer';
   updatePlayButton(focusPlay, focusing, label);
 }
 function setFocusing(value: boolean) {
@@ -275,16 +269,16 @@ function applyLayout(value: Layout, animate = true) {
   if (value !== 'music' && playing) setPlaying(false);
   if (value !== 'focus' && focusing) setFocusing(false);
   layout = value;
-  closePanels();
+  setSettingsOpen(false);
   clearTimeout(statusTimer);
-  $('thought-status').classList.remove('visible');
+  $('ocean-status').classList.remove('visible');
   for (const name of layouts) $(`${name}-panel`).hidden = name !== value;
   $('hero-title').textContent = headlines[value];
   $('layout-label').textContent = layoutNames[value];
   const next = layouts[(layouts.indexOf(value) + 1) % layouts.length];
-  const description = `切换中间栏，当前${layoutNames[value]}，下一种${layoutNames[next]}`;
+  const description = `Switch from ${layoutNames[value]} to ${layoutNames[next]}`;
   $('layout-toggle').setAttribute('aria-label', description);
-  $('layout-toggle').title = `${layoutNames[value]} · 点击切换${layoutNames[next]}`;
+  $('layout-toggle').title = `Switch to ${layoutNames[next]}`;
   document.querySelectorAll('.layout-dots i').forEach((dot, i) => dot.classList.toggle('active', i === layouts.indexOf(value)));
   storage.set('ascii-ocean-layout', value);
   if (animate && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
@@ -293,7 +287,7 @@ function applyLayout(value: Layout, animate = true) {
   }
 }
 const savedLayout = storage.get('ascii-ocean-layout') as Layout | null;
-applyLayout(savedLayout && layouts.includes(savedLayout) ? savedLayout : 'search', false);
+applyLayout(savedLayout && layouts.includes(savedLayout) ? savedLayout : 'music', false);
 $('layout-toggle').addEventListener('click', () => applyLayout(layouts[(layouts.indexOf(layout) + 1) % layouts.length]));
 const demoTimer = window.setInterval(() => {
   if (playing) {
@@ -303,48 +297,10 @@ const demoTimer = window.setInterval(() => {
   if (focusing) {
     if (remainingFocus() <= 0) {
       setFocusing(false);
-      status('这一刻，完成了。休息一下吧。');
+      status('Focus session complete. Take a break.');
       engine.ripple(window.innerWidth * .5, window.innerHeight * .6);
     } else renderFocus();
   }
 }, 250);
 
-const input = $<HTMLInputElement>('thought');
-const send = $<HTMLButtonElement>('send');
-function syncInput() {
-  send.disabled = !input.value.trim();
-}
-input.addEventListener('input', syncInput);
-input.addEventListener('keydown', e => {
-  if (e.key === 'Enter' && e.isComposing) e.preventDefault();
-});
-function renderHistory() {
-  $('thought-count').textContent = String(thoughts.length).padStart(2, '0');
-  $('empty-history').hidden = thoughts.length > 0;
-  const list = $('history-list');
-  list.replaceChildren();
-  for (const thought of thoughts) {
-    const li = document.createElement('li');
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.textContent = thought.text;
-    button.addEventListener('click', () => { applyLayout('search'); input.value = thought.text; syncInput(); input.focus(); });
-    const time = document.createElement('time');
-    time.dateTime = thought.date;
-    time.textContent = new Intl.DateTimeFormat('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).format(new Date(thought.date));
-    li.append(button, time); list.append(li);
-  }
-}
-$<HTMLFormElement>('search-panel').addEventListener('submit', e => {
-  e.preventDefault();
-  const text = input.value.trim();
-  if (!text) return;
-  thoughts.unshift({ text, date: new Date().toISOString() });
-  thoughts = thoughts.slice(0, 30);
-  const saved = storage.set('ascii-ocean-thoughts', JSON.stringify(thoughts));
-  renderHistory(); input.value = ''; syncInput();
-  engine.ripple(window.innerWidth * .5, window.innerHeight * .6);
-  status(saved ? '已留在 History，稍后再探索。' : '已留在本次打开的 History 中。');
-});
-renderHistory();
 window.addEventListener('pagehide', () => { window.clearInterval(demoTimer); engine.destroy(); }, { once: true });

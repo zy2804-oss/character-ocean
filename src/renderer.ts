@@ -10,7 +10,11 @@
 import { clamp, hash3, smoothstep } from "./math";
 import { SHARK_NODES, type Shark, type SharkKind, type World } from "./world";
 
-export type RenderMode = "ascii" | "type" | "braille" | "blocks" | "geometry" | "lines" | "hanzi";
+import { qingjing } from "./qingjing";
+import type { OceanTheme } from "./themes";
+import { paintDeepWater, drawSuspendedParticles } from "./deep-water";
+
+export type RenderMode = "ascii" | "braille" | "geometry" | "hanzi";
 
 // Unicode Braille: left column bits 1,2,3,7; right column bits 4,5,6,8.
 const BRAILLE_DOTS = [
@@ -54,8 +58,6 @@ const FLAG_EYE = 5;
 const FLAG_MARK = 6;
 const FLAG_TAIL = 7;
 const MARK_GLYPHS = "#%@";
-// Increasing ink density, using the reference's uppercase letters and punctuation.
-const TYPE_GLYPHS = [".", ":", "-=", "+*", "TA", "ER", "%", "#@"];
 
 // Sub-cell sample offsets for anti-aliased silhouettes.
 const SUBSAMPLES = [0.25, 0.3, 0.75, 0.3, 0.25, 0.72, 0.75, 0.72];
@@ -287,6 +289,7 @@ const SHAPES: Record<SharkKind, SharkShape> = {
     eye: [0.055, 0.14], gills: [0.16, 0.21],
     tint: [0.99, 1.02, 0.88],
   },
+
 };
 
 const KINDS = Object.keys(SHAPES) as SharkKind[];
@@ -334,6 +337,7 @@ export class AsciiRenderer {
   private rows = 0;
   private fontFamily = "ui-monospace, Menlo, monospace";
   private mode: RenderMode = "ascii";
+  private theme: OceanTheme = "light";
   private dark = false;
 
   private dotKind = new Uint8Array(0); // 0 none, 1 blue, 2 green, 3 red, 4 pale
@@ -373,6 +377,8 @@ export class AsciiRenderer {
 
   /** Cells holding a fish this frame (frame stamp); dots skip them. */
   private fishStamp = new Uint32Array(0);
+  private fishGlyph = new Uint16Array(0);
+  private fishEscapeHeading = new Float32Array(0);
   private frameId = 0;
   /** Fish cells bucketed by brightness, so each bucket is one fillStyle. */
   private fishBuckets: number[][] = FISH_ALPHAS.map(() => []);
@@ -411,11 +417,11 @@ export class AsciiRenderer {
     this.paintBackground();
   }
 
-  setTheme(dark: boolean) {
-    this.dark = dark;
-    this.fishStyles = FISH_ALPHAS.map(a => dark
-      ? `rgba(139,182,196,${a * 0.85})`
-      : `rgba(230,238,255,${a})`);
+  setTheme(theme: OceanTheme) {
+    this.theme = theme;
+    this.dark = theme !== "light";
+    const fishColor = theme === "deep" ? "210,240,248" : this.dark ? "139,182,196" : "230,238,255";
+    this.fishStyles = FISH_ALPHAS.map(a => `rgba(${fishColor},${this.dark ? a * 0.85 : a})`);
     this.paintBackground();
   }
 
@@ -451,6 +457,8 @@ export class AsciiRenderer {
     this.sharkAngle = new Float32Array(n);
     this.sharkShadow = new Uint8Array(n);
     this.fishStamp = new Uint32Array(n);
+    this.fishGlyph = new Uint16Array(n);
+    this.fishEscapeHeading = new Float32Array(n);
 
     for (let i = 0; i < n; i++) {
       const col = i % this.cols;
@@ -468,7 +476,10 @@ export class AsciiRenderer {
     if (!g) return;
     const { width: W, height: H, dpr, cw, ch } = this;
     g.setTransform(dpr, 0, 0, dpr, 0, 0);
-    if (this.dark) {
+    if (this.theme === "deep") {
+      paintDeepWater(g, W, H);
+      return;
+    } else if (this.dark) {
       const water = g.createRadialGradient(W * 0.5, H * 0.49, 0, W * 0.5, H * 0.49, Math.hypot(W, H) * 0.62);
       water.addColorStop(0, "#10252f");
       water.addColorStop(0.48, "#0b1923");
@@ -478,7 +489,7 @@ export class AsciiRenderer {
       g.fillStyle = "#000";
     }
     g.fillRect(0, 0, W, H);
-    if (this.mode !== "type") paintGrid(g, W, H, cw, ch, dpr, this.dark);
+    paintGrid(g, W, H, cw, ch, dpr, this.dark);
   }
 
   render(world: World, dt: number) {
@@ -494,6 +505,7 @@ export class AsciiRenderer {
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.drawImage(this.bg, 0, 0);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    if (this.theme === "deep") drawSuspendedParticles(ctx, this.width, this.height, t);
 
     ctx.font = `600 ${Math.round(ch * 0.74)}px ${this.fontFamily}`;
     ctx.textAlign = "center";
@@ -502,6 +514,7 @@ export class AsciiRenderer {
     this.markFish(world);
     this.drawDots(t);
 
+    this.drawRipple(world);
     this.drawHeat();
     this.drawFish();
     this.drawSharks(t);
@@ -973,6 +986,7 @@ export class AsciiRenderer {
             sharkShade[i] = 0.76;
             sharkKind[i] = kindIndex;
             sharkDepth[i] = sh.depth;
+            sharkKey[i] = ((k + sh.id * 13) * 31 + j) >>> 0;
             this.sharkAngle[i] = Math.atan2(dy, dx);
           }
         }
@@ -981,10 +995,6 @@ export class AsciiRenderer {
   }
 
   private drawSharks(t: number) {
-    if (this.mode === "type") {
-      this.drawTypeSharks();
-      return;
-    }
     if (this.mode !== "ascii") {
       this.drawSymbolSharks(t);
       return;
@@ -1062,39 +1072,6 @@ export class AsciiRenderer {
     }
   }
 
-  /** Monochrome type art: the glyphs alone carry silhouette, shading and skin markings. */
-  private drawTypeSharks() {
-    const { ctx, cw, ch, cols, sharkFlag, sharkShade, sharkDepth, sharkKey } = this;
-    ctx.save();
-    ctx.font = `600 ${Math.round(ch * 0.86)}px ${this.fontFamily}`;
-    ctx.fillStyle = this.dark ? "#dce9ee" : "#d8dee4";
-    for (let i = 0; i < sharkFlag.length; i++) {
-      const flag = sharkFlag[i];
-      if (!flag) continue;
-      const shade = sharkShade[i];
-      const key = sharkKey[i];
-      const edge = flag === FLAG_EDGE;
-      const depth = 0.78 + 0.22 * sharkDepth[i];
-      let tone = 0.25 + shade * 0.65;
-      if (flag === FLAG_RIDGE) tone = 0.96;
-      else if (flag === FLAG_MARK || flag === FLAG_EYE) tone = 0.16;
-      else if (flag === FLAG_FIN) tone = 0.2 + shade * 0.55;
-      else if (edge) tone = 0.08 + shade * 0.22;
-      // Body-anchored variation keeps letters attached to the fish as it swims.
-      const jitter = ((key >>> 5) % 3) - 1;
-      const family = TYPE_GLYPHS[clamp(Math.round(tone * 7) + jitter, 0, 7)];
-      let glyph = family[(key >>> 10) % family.length];
-      if (flag === FLAG_EYE) glyph = ":";
-      if (flag === FLAG_TAIL) {
-        const direction = ((Math.round(this.sharkAngle[i] / (Math.PI / 4)) % 4) + 4) % 4;
-        glyph = ["-", "\\", "|", "/"][direction];
-      }
-      ctx.globalAlpha = depth * (edge ? 0.35 + shade * 0.4 : 0.72 + tone * 0.26);
-      ctx.fillText(glyph, (i % cols) * cw + cw / 2, Math.floor(i / cols) * ch + ch / 2 + 1, cw * 0.9);
-    }
-    ctx.restore();
-  }
-
   /** Draw the same body grid using distinct symbol vocabularies, without resetting the world. */
   private drawSymbolSharks(t: number) {
     const { ctx, cw, ch, cols, sharkFlag, sharkShade, sharkDepth, sharkKey, sharkKind } = this;
@@ -1112,7 +1089,7 @@ export class AsciiRenderer {
       const key = sharkKey[i];
       const edge = flag === FLAG_EDGE;
       const dim = 0.7 + sharkDepth[i] * 0.3;
-      if (flag === FLAG_TAIL && this.mode !== "braille") {
+      if (flag === FLAG_TAIL && this.mode === "geometry") {
         this.drawWhipCell(i, x, y, dim);
         continue;
       }
@@ -1140,7 +1117,7 @@ export class AsciiRenderer {
         continue;
       }
 
-      if (flag === FLAG_EYE) {
+      if (flag === FLAG_EYE && this.mode === "geometry") {
         ctx.beginPath();
         ctx.arc(x + cw / 2, y + ch / 2, Math.max(1.2, cw * 0.18), 0, Math.PI * 2);
         ctx.fill();
@@ -1165,23 +1142,8 @@ export class AsciiRenderer {
         continue;
       }
 
-      let glyph = "";
-      if (this.mode === "blocks") {
-        const ramp = "░▒▓█";
-        glyph = edge ? "░" : ramp[clamp(Math.floor(shade * 3.99), 0, 3)];
-        if (!edge && flag === FLAG_FIN) glyph = (key & 1) ? "▄" : "▀";
-      } else if (this.mode === "lines") {
-        const direction = ((Math.round(this.sharkAngle[i] / (Math.PI / 4)) % 4) + 4) % 4;
-        glyph = ["─", "╲", "│", "╱"][direction];
-        if (!edge && (flag === FLAG_RIDGE || shade > 0.85)) glyph = "┼";
-        ctx.globalAlpha *= edge ? 0.8 : 0.65 + shade * 0.35;
-      } else {
-        const ramp = "一十川山水海浪魚鯊";
-        glyph = edge ? ((key & 1) ? "一" : "十")
-          : ramp[clamp(Math.floor(shade * (ramp.length - 1)) + ((key >>> 3) % 3) - 1, 0, ramp.length - 1)];
-        // A small aligned field of actual CJK characters, with no per-cell solid background.
-        ctx.globalAlpha *= edge ? 0.55 : 1;
-      }
+      const glyph = qingjing[key % qingjing.length];
+      ctx.globalAlpha *= edge ? 0.75 : 1;
       ctx.fillText(glyph, x + cw / 2, y + ch / 2 + 1, cw * 0.98);
     }
     ctx.restore();
@@ -1211,11 +1173,13 @@ export class AsciiRenderer {
     const frame = ++this.frameId;
     for (const bucket of fishBuckets) bucket.length = 0;
     for (let pass = 0; pass < 2; pass++) {
-      for (const f of world.fish) {
+      for (const [fishIndex, f] of world.fish.entries()) {
         if (!f.alive || (f.depth > 0.78 ? 0 : 1) !== pass) continue;
         const i = this.cellIndex(f.x, f.y);
         if (i < 0 || fishStamp[i] === frame || sharkFlag[i]) continue;
         fishStamp[i] = frame;
+        this.fishGlyph[i] = fishIndex % qingjing.length;
+        this.fishEscapeHeading[i] = f.startledUntil > world.time ? Math.atan2(f.vy, f.vx) : NaN;
         const glint = clamp(Math.abs(f.turn) / 3.5, 0, 1);
         const v = 0.3 + (0.4 * (f.depth - 0.55)) / 0.45 + 0.3 * Math.max(glint, f.alarm);
         fishBuckets[clamp(Math.floor(v * FISH_ALPHAS.length), 0, FISH_ALPHAS.length - 1)].push(i);
@@ -1225,14 +1189,46 @@ export class AsciiRenderer {
 
   private drawFish() {
     const { ctx, cw, ch, cols, fishBuckets } = this;
+    const hanzi = this.mode === "hanzi";
+    ctx.save();
+    if (hanzi) ctx.font = `500 ${Math.round(cw * 0.98)}px OceanHanzi, sans-serif`;
     for (let b = 0; b < fishBuckets.length; b++) {
       const bucket = fishBuckets[b];
       if (!bucket.length) continue;
       ctx.fillStyle = this.fishStyles[b];
       for (const i of bucket) {
-        ctx.fillText("-", (i % cols) * cw + cw / 2, ((i / cols) | 0) * ch + ch / 2 + 1);
+        const x = (i % cols) * cw + cw / 2;
+        const y = ((i / cols) | 0) * ch + ch / 2 + 1;
+        const heading = this.fishEscapeHeading[i];
+        if (!Number.isNaN(heading)) {
+          ctx.save();
+          ctx.translate(x, y);
+          ctx.rotate(heading);
+          ctx.fillStyle = this.dark ? "#bbf3ff" : "#fff";
+          ctx.fillText(">", hanzi ? cw * 0.64 : 0, 0);
+          ctx.restore();
+          if (!hanzi) continue;
+        }
+        ctx.fillText(hanzi ? qingjing[this.fishGlyph[i]] : "-", x, y);
       }
     }
+    ctx.restore();
+  }
+
+  private drawRipple(world: World) {
+    const splash = world.splashState;
+    if (!splash) return;
+    const progress = (world.time - splash.startedAt) / 0.75;
+    if (progress >= 1) return;
+    const { ctx } = this;
+    ctx.save();
+    ctx.strokeStyle = this.dark ? "#aeeeff" : "#fff";
+    ctx.lineWidth = 1.5;
+    ctx.globalAlpha = 0.55 * (1 - progress);
+    ctx.beginPath();
+    ctx.arc(splash.x, splash.y, 14 + progress * splash.radius * 0.58, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
   }
 
   private drawHeat() {
@@ -1242,8 +1238,7 @@ export class AsciiRenderer {
       if (h < 0.08) continue;
       const col = i % cols;
       const row = (i / cols) | 0;
-      ctx.fillStyle = this.mode === "type" ? `rgba(210,231,239,${Math.min(1, h).toFixed(2)})`
-        : h > 0.5 ? `rgba(255,120,60,${h.toFixed(2)})` : `rgba(220,40,40,${(h * 1.6).toFixed(2)})`;
+      ctx.fillStyle = h > 0.5 ? `rgba(255,120,60,${h.toFixed(2)})` : `rgba(220,40,40,${(h * 1.6).toFixed(2)})`;
       ctx.fillText(h > 0.6 ? "*" : "·", col * cw + cw / 2, row * ch + ch / 2 + 1);
     }
   }
@@ -1309,12 +1304,7 @@ export class AsciiRenderer {
         const col = i % cols;
         const row = (i / cols) | 0;
         // Sit the dot low-right in its cell, as in the reference.
-        if (this.mode === "type") {
-          ctx.fillStyle = "rgba(164,195,209,0.3)";
-          ctx.fillText(".", col * cw + cw / 2, row * ch + ch / 2 + 1);
-        } else {
-          ctx.fillRect(Math.round(col * cw + cw * 0.66 - size / 2), Math.round(row * ch + ch * 0.64 - size / 2), size, size);
-        }
+        ctx.fillRect(Math.round(col * cw + cw * 0.66 - size / 2), Math.round(row * ch + ch * 0.64 - size / 2), size, size);
       }
     }
     ctx.restore();

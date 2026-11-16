@@ -40,14 +40,14 @@ redistribution license for the upstream portions.
 - Geist / Geist Mono: [assets/OFL.txt](assets/OFL.txt)
 - Noto Sans SC subset: [assets/NotoSansSC-OFL.txt](assets/NotoSansSC-OFL.txt)
 
-## Generated HTML
+## Generated website
 
-`dist/index.html` combines code and fonts from the components above. The MIT
-grant for the original frontend does not apply to the entire generated file.
-Embedded font licenses and attribution notices are retained in the HTML.
+The files in `dist/` combine code and fonts from the components above. The MIT
+grant for the original frontend does not apply to the entire generated website.
+Font licenses and attribution notices are retained in `dist/index.html`.
 
 ---
 
 本仓库按组件区分授权：上方列出的新增前端代码及工具使用 MIT 许可；
 源自 stackedlol/ascii-sharks 的动画部分暂无上游明确许可证；字体按各自的
-SIL OFL 1.1 许可提供。请勿将整个仓库或打包后的 HTML 视为 MIT 授权项目。
+SIL OFL 1.1 许可提供。请勿将整个仓库或构建后的站点 视为 MIT 授权项目。

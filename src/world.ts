@@ -40,6 +40,7 @@ export interface Fish {
   species: number;
   /** 0 calm → 1 panicking. Spreads to neighbours. */
   alarm: number;
+  startledUntil: number;
   alive: boolean;
   respawnAt: number;
   /** Tail-beat phase. */
@@ -84,6 +85,8 @@ const FISH_SEPARATION_K = 420;
 const FISH_ALIGN_K = 1.4;
 const FISH_COHESION_K = 1;
 const FISH_FLEE_K = 1100;
+const SPLASH_RADIUS = 240;
+const SPLASH_RECOVERY = 2.2;
 const BLIND_COS = -0.6; // ~127° either side of the heading is visible
 
 export class World {
@@ -93,7 +96,12 @@ export class World {
   fish: Fish[] = [];
   sharks: Shark[] = [];
   events: WorldEvent[] = [];
-  pointer = { x: 0, y: 0, active: false };
+  pointer = { x: 0, y: 0, active: false, movedAt: -Infinity };
+  private recentSplash: { x: number; y: number; radius: number; startedAt: number; until: number } | null = null;
+
+  get splashState() {
+    return this.recentSplash;
+  }
 
   /** Fish neighbourhood radius; the spatial hash bucket size matches it. */
   private perception = 60;
@@ -197,6 +205,7 @@ export class World {
           vy: Math.sin(dir) * sp.cruise,
           species,
           alarm: 0,
+          startledUntil: 0,
           alive: true,
           respawnAt: 0,
           phase: rand(0, TAU),
@@ -211,18 +220,20 @@ export class World {
 
   splash(x: number, y: number) {
     this.events.push({ kind: "splash", x, y });
-    const r = 240;
+    this.recentSplash = { x, y, radius: SPLASH_RADIUS, startedAt: this.time, until: this.time + SPLASH_RECOVERY };
     for (const f of this.fish) {
       if (!f.alive) continue;
       const dx = f.x - x;
       const dy = f.y - y;
       const d = Math.hypot(dx, dy);
-      if (d > r || d < 1e-3) continue;
-      // Flash expansion: everybody nearby bolts straight out.
-      const k = (1 - d / r) * 260;
-      f.vx += (dx / d) * k;
-      f.vy += (dy / d) * k;
-      f.alarm = 1;
+      if (d >= SPLASH_RADIUS) continue;
+      const escapeSpeed = 110 + (1 - d / SPLASH_RADIUS) * 125;
+      const direction = d > 1e-3 ? Math.atan2(dy, dx) : Math.atan2(f.vy, f.vx) + Math.PI;
+      // Overwrite inward momentum so fish visibly turn away on the next frame.
+      f.vx = Math.cos(direction) * escapeSpeed;
+      f.vy = Math.sin(direction) * escapeSpeed;
+      f.startledUntil = this.time + 0.85;
+      f.alarm = Math.max(f.alarm, 1 - d / SPLASH_RADIUS * 0.65);
     }
   }
 
@@ -279,6 +290,10 @@ export class World {
     const cur = this.tmp;
     const calmDecay = Math.exp(-dt * 0.7);
     const contagion = Math.min(1, dt * 6);
+    if (this.recentSplash && time >= this.recentSplash.until) this.recentSplash = null;
+    const splash = this.recentSplash;
+    const splashStrength = splash ? ((splash.until - time) / SPLASH_RECOVERY) ** 2 : 0;
+    const movingPointer = pointer.active && time - pointer.movedAt < 0.35;
 
     for (let i = 0; i < fish.length; i++) {
       const f = fish[i];
@@ -399,7 +414,19 @@ export class World {
         fear = Math.max(fear, Math.sqrt(w));
       }
 
-      if (pointer.active) {
+      if (splash) {
+        const dx = f.x - splash.x;
+        const dy = f.y - splash.y;
+        const d = Math.hypot(dx, dy);
+        if (d < SPLASH_RADIUS && d > 1e-3) {
+          const weight = splashStrength * (1 - d / SPLASH_RADIUS) ** 2;
+          ax += (dx / d) * FISH_FLEE_K * weight;
+          ay += (dy / d) * FISH_FLEE_K * weight;
+          fear = Math.max(fear, weight);
+        }
+      }
+
+      if (movingPointer) {
         const pr = 130;
         const dx = f.x - pointer.x;
         const dy = f.y - pointer.y;
@@ -549,9 +576,23 @@ export class World {
         dy += (toY / d) * w;
       }
 
+      let splashAvoidance = 0;
+      const splash = this.recentSplash;
+      if (splash) {
+        const mid = Math.floor(SHARK_NODES / 3) * 2;
+        const awayX = nodes[mid] - splash.x;
+        const awayY = nodes[mid + 1] - splash.y;
+        const distance = Math.hypot(awayX, awayY);
+        if (distance < splash.radius && distance > 1e-3) {
+          splashAvoidance = (1 - distance / splash.radius) * ((splash.until - time) / SPLASH_RECOVERY);
+          dx += awayX / distance * splashAvoidance * 9;
+          dy += awayY / distance * splashAvoidance * 9;
+        }
+      }
+
       const desired = Math.atan2(dy, dx);
-      // Sharks can't pivot on the spot: the turning circle grows with speed.
-      const agility = Math.min(hunting ? 1.7 + closing : 0.8, sh.speed / (L * 0.22));
+      // Large fish turn on a curve; even a startled fish keeps moving forward.
+      const agility = Math.min(hunting ? 1.7 + closing : 0.8, sh.speed / (L * 0.22)) + splashAvoidance * 1.7;
       const maxTurn = agility * dt;
       const turned = clamp(angleDiff(sh.heading, desired), -maxTurn, maxTurn);
       sh.heading += turned;
@@ -655,6 +696,7 @@ export class World {
       f.alive = true;
       f.species = species;
       f.alarm = 0;
+      f.startledUntil = 0;
       f.turn = 0;
       f.millDir = millDir;
       f.x = x + rand(-1, 1) * this.perception;

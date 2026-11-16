@@ -2,13 +2,26 @@ import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 
 const port = 4173;
+const files = new Map([
+  ['/', ['index.html', 'text/html']],
+  ['/index.html', ['index.html', 'text/html']],
+  ['/styles.css', ['styles.css', 'text/css']],
+  ['/app.js', ['app.js', 'text/javascript']],
+]);
+
 createServer(async (req, res) => {
-  if (req.url === '/favicon.ico') { res.writeHead(204); res.end(); return; }
+  const pathname = new URL(req.url, 'http://localhost').pathname;
+  const file = files.get(pathname);
+  if (!file) {
+    res.writeHead(404).end('Not found.');
+    return;
+  }
+
   try {
-    const html = await readFile(new URL('./dist/index.html', import.meta.url));
-    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
-    res.end(html);
+    const [name, contentType] = file;
+    const data = await readFile(new URL(`./dist/${name}`, import.meta.url));
+    res.writeHead(200, { 'Content-Type': `${contentType}; charset=utf-8`, 'Cache-Control': 'no-store' }).end(data);
   } catch {
-    res.writeHead(500); res.end('Build the page with npm run build.');
+    res.writeHead(500).end('Build the site with npm run build.');
   }
 }).listen(port, '127.0.0.1', () => console.log(`Local: http://127.0.0.1:${port}`));

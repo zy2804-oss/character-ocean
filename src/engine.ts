@@ -1,6 +1,7 @@
 /** Adapted from stackedlol/ascii-sharks. See LICENSE.md and THIRD_PARTY_NOTICES.md. */
 import { AsciiRenderer, type RenderMode } from "./renderer";
 import { World, type SharkSpec } from "./world";
+import type { OceanTheme } from "./themes";
 
 const STEP = 1 / 60;
 const MAX_STEPS = 4;
@@ -71,8 +72,8 @@ export class OceanEngine {
     }
   }
 
-  setTheme(dark: boolean) {
-    this.renderer.setTheme(dark);
+  setTheme(theme: OceanTheme) {
+    this.renderer.setTheme(theme);
     this.renderer.render(this.world, 0);
   }
 
@@ -86,7 +87,28 @@ export class OceanEngine {
 
   ripple(x: number, y: number) {
     this.world.splash(x, y);
-    if (this.paused) this.renderer.render(this.world, STEP);
+    if (this.reducedMotion.matches && !this.paused) {
+      // Show the fish in their new positions in one frame, without animating.
+      for (let i = 0; i < 8; i++) this.world.step(STEP);
+    }
+    if (this.paused || this.reducedMotion.matches) this.renderer.render(this.world, STEP);
+  }
+
+  rippleNearSchool(panel?: DOMRect) {
+    const { width, height, fish } = this.world;
+    const x = width * 0.5;
+    const y = height * 0.72;
+    let bestDistance = Infinity;
+    let target: { x: number; y: number } | undefined;
+    for (const f of fish) {
+      if (!f.alive || f.x < 24 || f.x > width - 24 || f.y < 24 || f.y > height - 56) continue;
+      if (panel && f.x > panel.left - 16 && f.x < panel.right + 16 && f.y > panel.top - 16 && f.y < panel.bottom + 16) continue;
+      const distance = Math.hypot(f.x - x, f.y - y);
+      if (distance >= bestDistance) continue;
+      bestDistance = distance;
+      target = f;
+    }
+    this.ripple(target?.x ?? x, target?.y ?? y);
   }
 
   destroy() {
@@ -163,11 +185,13 @@ export class OceanEngine {
     p.x = x;
     p.y = y;
     p.active = inside && e.pointerType !== "touch";
+    p.movedAt = this.world.time;
   };
 
   private onPointerDown = (e: PointerEvent) => {
+    if (e.button !== 0 || (e.target instanceof Element && e.target.closest(".center-panel, .ocean-controls, .credit"))) return;
     const { x, y, inside } = this.toLocal(e);
-    if (inside && !this.reducedMotion.matches) this.world.splash(x, y);
+    if (inside) this.ripple(x, y);
   };
 
   private onPointerLeave = () => {
